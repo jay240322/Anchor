@@ -41,3 +41,20 @@ def test_truncation_detected(tmp_path):
     ledger = tmp_path / ".anchor" / "ledger.jsonl"
     ledger.write_text(ledger.read_text().splitlines()[0] + "\n")
     assert run(tmp_path, "verify", check=False).returncode == 2
+
+
+def test_gate_blocks_unevidenced_claim(tmp_path):
+    run(tmp_path, "init")
+    proc = run(tmp_path, "claim", "add", "--statement", "Host is compromised",
+               "--status", "supported", check=False)
+    assert proc.returncode == 2
+
+
+def test_gate_passes_with_evidence(tmp_path):
+    run(tmp_path, "init")
+    ev = run(tmp_path, "evidence", "add", "--tool", "nmap",
+             "--observation", "22/tcp open ssh").stdout.strip()
+    run(tmp_path, "claim", "add", "--statement", "SSH is exposed",
+        "--status", "supported", "--evidence", ev)
+    assert run(tmp_path, "check").returncode == 0
+    assert "VERIFIED" in run(tmp_path, "report").stdout

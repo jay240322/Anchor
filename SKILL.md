@@ -1,6 +1,6 @@
 ---
 name: anchor
-description: Anchors every cybersecurity research finding to a hashed, tamper-evident evidence record so the claim is verifiable and replayable. Use when capturing tool output, transcripts, or document observations that a later finding will depend on.
+description: Anchors every cybersecurity research finding to a hashed, tamper-evident evidence record so the claim is verifiable and replayable. Blocks final reports whose claims are not backed by recorded evidence.
 license: MIT
 ---
 
@@ -11,6 +11,7 @@ license: MIT
 - Any tool invocation whose output you will later rely on in a finding.
 - Negative results (failed commands, absent strings, filtered ports) — these are evidence too.
 - Manual observations from reading code, transcripts, or documents.
+- Producing vulnerability findings, CTI assessments, or detection-rule reviews that a reviewer must verify.
 
 ## When not to use
 
@@ -44,6 +45,31 @@ Assume `ANCHOR="python3 scripts/anchor.py --root ."` and run from the project ro
    $ANCHOR verify     # exit 0 = OK, exit 2 = tamper
    ```
 
+## Claims and the gate
+
+Every factual assertion in a final report becomes a claim. Do not deliver the report if
+`$ANCHOR check` does not print `gate PASS`.
+
+```bash
+$ANCHOR claim add \
+  --statement "Host 10.0.0.5 exposes SSH (OpenSSH 8.9p1) on 22/tcp" \
+  --status supported \
+  --confidence high \
+  --evidence ev-xxxxxxxxxx
+```
+
+Status values:
+- `supported` — direct evidence exists. Blocking.
+- `contradicted` — evidence refutes the statement. Blocking; must be reported.
+- `unverified` — no evidence yet. Non-blocking, appears in a labeled report section.
+
+Then run the gate and emit the report:
+
+```bash
+$ANCHOR check                # exit 2 = blocked
+$ANCHOR report > FINDINGS.md
+```
+
 ## Record contract (evidence)
 
 | Field | Required | Notes |
@@ -56,6 +82,17 @@ Assume `ANCHOR="python3 scripts/anchor.py --root ."` and run from the project ro
 | `artifacts` | no | Hashed automatically |
 | `operator` | yes | Who captured it |
 | `captured_at` | yes | ISO-8601 UTC |
+
+## Record contract (claim)
+
+| Field | Required | Notes |
+|---|---|---|
+| `id` | yes | `cl-` + 10 hex, generated |
+| `statement` | yes | One falsifiable sentence |
+| `status` | yes | `supported` \| `contradicted` \| `unverified` |
+| `confidence` | yes | `high` \| `medium` \| `low` |
+| `evidence` | conditional | Required for `supported` and `contradicted` |
+| `caveats` | no | Scope limits, assumptions |
 
 Full schema: `references/record-schema.md`.
 
