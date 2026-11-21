@@ -1,6 +1,7 @@
 # Record schema
 
 ## Ledger line format
+
 One JSON object per line in `.anchor/ledger.jsonl`. Keys sorted, UTF-8, newline-terminated.
 
 ```json
@@ -36,10 +37,25 @@ breaks every subsequent link.
 }
 ```
 
+## Claim payload
+
+```json
+{
+  "id": "cl-7d8e9f0a1b",
+  "statement": "Host 10.0.0.5 exposes SSH (OpenSSH 8.9p1) on 22/tcp",
+  "status": "supported",
+  "confidence": "high",
+  "evidence": ["ev-1a2b3c4d5e"],
+  "caveats": ["scan performed from a single vantage point"]
+}
+```
+
 ## Invariants enforced by the CLI
 
 1. `prev` must equal the previous record's `hash`; the first record uses `GENESIS_PREV`.
 2. `hash` must equal the recomputed canonical hash.
 3. `.anchor/HEAD` must equal the last record's `hash`.
+4. `supported` and `contradicted` claims must reference at least one evidence id.
+5. Every referenced evidence id must exist in the ledger.
 
-Violating any of these makes `verify` exit 2.
+Violating 1–3 makes `verify` exit 2. Violating 4–5 makes `check` exit 2.

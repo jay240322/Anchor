@@ -14,26 +14,35 @@ HEAD_FILE = "HEAD"
 GENESIS_PREV = "0" * 64
 SOURCE_TYPES = ("tool_output", "manual", "document", "network", "external_report", "code_read")
 CONFIDENCES = ("high", "medium", "low")
+CLAIM_STATUSES = ("supported", "contradicted", "unverified")
+BLOCKING_STATUSES = ("supported", "contradicted")
+
 
 class LedgerError(Exception):
     pass
 
+
 def canonical_bytes(obj):
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
 
 def sha256_hex(data):
     return hashlib.sha256(data).hexdigest()
 
+
 def now_iso():
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
 
 def compute_hash(record):
     body = {k: record[k] for k in ("seq", "ts", "type", "payload", "prev")}
     return sha256_hex(canonical_bytes(body))
 
+
 def ledger_paths(root):
     d = pathlib.Path(root) / LEDGER_DIR
     return d / LEDGER_FILE, d / HEAD_FILE
+
 
 def load_records(ledger_path):
     if not ledger_path.exists():
@@ -49,6 +58,7 @@ def load_records(ledger_path):
             except json.JSONDecodeError as exc:
                 raise LedgerError(f"corrupt ledger at line {lineno}: {exc}") from exc
     return records
+
 
 def append_record(ledger_path, head_path, rec_type, payload):
     records = load_records(ledger_path)
@@ -68,6 +78,7 @@ def append_record(ledger_path, head_path, rec_type, payload):
         os.fsync(fh.fileno())
     head_path.write_text(record["hash"] + "\n", encoding="utf-8")
     return record
+
 
 def verify_chain(ledger_path, head_path):
     records = load_records(ledger_path)
@@ -91,6 +102,7 @@ def verify_chain(ledger_path, head_path):
         problems.append("HEAD does not match last record (truncation or external edit)")
     return records, problems
 
+
 def unique_id(prefix, seed, taken):
     for n in range(1000):
         cand = prefix + sha256_hex(f"{seed}|{n}".encode("utf-8"))[:10]
@@ -98,10 +110,33 @@ def unique_id(prefix, seed, taken):
             return cand
     raise LedgerError("could not allocate a unique id")
 
+
+def check_claims(records):
+    evidence = {r["payload"]["id"]: r["payload"] for r in records if r["type"] == "evidence"}
+    blocking, warnings = [], []
+    for rec in records:
+        if rec["type"] != "claim":
+            continue
+        c = rec["payload"]
+        if c["status"] in BLOCKING_STATUSES:
+            if not c["evidence"]:
+                blocking.append(f"{c['id']}: status '{c['status']}' has no evidence")
+            for eid in c["evidence"]:
+                if eid not in evidence:
+                    blocking.append(f"{c['id']}: references unknown evidence '{eid}'")
+            levels = [evidence[e]["confidence"] for e in c["evidence"] if e in evidence]
+            if levels and all(lvl == "low" for lvl in levels):
+                warnings.append(f"{c['id']}: only low-confidence evidence backs a '{c['status']}' claim")
+        elif c["status"] == "unverified" and c["evidence"]:
+            warnings.append(f"{c['id']}: marked unverified but has evidence attached")
+    return blocking, warnings
+
+
 def cmd_init(args, paths):
     ledger_path, _ = paths
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
     print(f"initialized: {ledger_path}" if not ledger_path.exists() else f"already initialized: {ledger_path}")
+
 
 def cmd_evidence_add(args, paths):
     ledger_path, head_path = paths
@@ -132,6 +167,7 @@ def cmd_evidence_add(args, paths):
     print(payload["id"])
     print(f"seq={rec['seq']} hash={rec['hash']}", file=sys.stderr)
 
+
 def cmd_evidence_list(args, paths):
     ledger_path, _ = paths
     for rec in load_records(ledger_path):
@@ -139,6 +175,38 @@ def cmd_evidence_list(args, paths):
             continue
         p = rec["payload"]
         print(f"{p['id']}  {p['confidence']:<6} {p['tool']:<14} {p['observation'][:80]}")
+
+
+def cmd_claim_add(args, paths):
+    ledger_path, head_path = paths
+    records = load_records(ledger_path)
+    evidence_ids = {r["payload"]["id"] for r in records if r["type"] == "evidence"}
+    missing = [e for e in args.evidence if e not in evidence_ids]
+    if missing:
+        raise LedgerError("unknown evidence id(s): " + ", ".join(missing))
+    if args.status in BLOCKING_STATUSES and not args.evidence:
+        raise LedgerError(f"status '{args.status}' requires at least one --evidence id")
+    taken = {r["payload"]["id"] for r in records if r["type"] == "claim"}
+    payload = {
+        "id": unique_id("cl-", args.statement, taken),
+        "statement": args.statement,
+        "status": args.status,
+        "confidence": args.confidence,
+        "evidence": args.evidence,
+        "caveats": args.caveat,
+    }
+    append_record(ledger_path, head_path, "claim", payload)
+    print(payload["id"])
+
+
+def cmd_claim_list(args, paths):
+    ledger_path, _ = paths
+    for rec in load_records(ledger_path):
+        if rec["type"] != "claim":
+            continue
+        p = rec["payload"]
+        print(f"{p['id']}  {p['status']:<12} {p['confidence']:<6} {p['statement'][:80]}")
+
 
 def cmd_verify(args, paths):
     ledger_path, head_path = paths
@@ -151,11 +219,92 @@ def cmd_verify(args, paths):
     print(f"chain OK ({len(records)} records)")
     return 0
 
+
+def cmd_check(args, paths):
+    ledger_path, head_path = paths
+    records, chain_problems = verify_chain(ledger_path, head_path)
+    blocking, warnings = check_claims(records)
+    for w in warnings:
+        print(f"WARN: {w}", file=sys.stderr)
+    if chain_problems or blocking:
+        for p in chain_problems + blocking:
+            print(f"FAIL: {p}", file=sys.stderr)
+        print("gate BLOCKED", file=sys.stderr)
+        return 2
+    print("gate PASS")
+    return 0
+
+
+def cmd_report(args, paths):
+    ledger_path, head_path = paths
+    records, chain_problems = verify_chain(ledger_path, head_path)
+    blocking, warnings = check_claims(records)
+    evidence = {r["payload"]["id"]: r["payload"] for r in records if r["type"] == "evidence"}
+    claims = [r["payload"] for r in records if r["type"] == "claim"]
+
+    out = ["# anchor — Audit Report", ""]
+    out.append(f"- Generated: {now_iso()}")
+    out.append(f"- Records: {len(records)} ({len(evidence)} evidence, {len(claims)} claims)")
+    out.append(f"- Chain: {'VERIFIED' if not chain_problems else 'FAILED'}")
+    out.append(f"- Gate: {'PASS' if not chain_problems and not blocking else 'BLOCKED'}")
+    out.append("")
+
+    for status, title in (("supported", "Supported claims"),
+                          ("contradicted", "Contradicted claims"),
+                          ("unverified", "Unverified claims (not relied upon)")):
+        out.append(f"## {title}")
+        out.append("")
+        subset = [c for c in claims if c["status"] == status]
+        if not subset:
+            out.append("_None._")
+            out.append("")
+            continue
+        for c in subset:
+            out.append(f"### `{c['id']}` — {c['status']} (confidence: {c['confidence']})")
+            out.append("")
+            out.append(f"> {c['statement']}")
+            out.append("")
+            if c["evidence"]:
+                out.append("Evidence:")
+                for eid in c["evidence"]:
+                    ev = evidence.get(eid)
+                    if not ev:
+                        out.append(f"- `{eid}` — **missing from ledger**")
+                        continue
+                    out.append(f"- `{eid}` ({ev['tool']}, {ev['source_type']}, {ev['confidence']})")
+                    out.append(f"  - {ev['observation']}")
+                    if ev.get("invocation"):
+                        out.append(f"  - invocation: `{ev['invocation']}`")
+                    for a in ev.get("artifacts", []):
+                        out.append(f"  - artifact: `{a['path']}` sha256 `{a['sha256']}`")
+            if c["caveats"]:
+                out.append("")
+                out.append("Caveats:")
+                for cav in c["caveats"]:
+                    out.append(f"- {cav}")
+            out.append("")
+
+    if warnings:
+        out.append("## Warnings")
+        out.append("")
+        for w in warnings:
+            out.append(f"- {w}")
+        out.append("")
+    if chain_problems or blocking:
+        out.append("## Blocking issues")
+        out.append("")
+        for p in chain_problems + blocking:
+            out.append(f"- {p}")
+        out.append("")
+    print("\n".join(out))
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="anchor")
     p.add_argument("--root", default=".", help="project root containing .anchor/")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("init")
+
     ev = sub.add_parser("evidence")
     evs = ev.add_subparsers(dest="ev_cmd", required=True)
     eadd = evs.add_parser("add")
@@ -169,21 +318,40 @@ def build_parser():
     eadd.add_argument("--tag", action="append", default=[])
     evs.add_parser("list")
 
+    cl = sub.add_parser("claim")
+    cls = cl.add_subparsers(dest="cl_cmd", required=True)
+    cadd = cls.add_parser("add")
+    cadd.add_argument("--statement", required=True)
+    cadd.add_argument("--status", default="unverified", choices=CLAIM_STATUSES)
+    cadd.add_argument("--confidence", default="medium", choices=CONFIDENCES)
+    cadd.add_argument("--evidence", action="append", default=[])
+    cadd.add_argument("--caveat", action="append", default=[])
+    cls.add_parser("list")
+
     sub.add_parser("verify")
+    sub.add_parser("check")
+    sub.add_parser("report")
     return p
+
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
     paths = ledger_paths(args.root)
     if args.cmd == "evidence":
         key = ("evidence", args.ev_cmd)
+    elif args.cmd == "claim":
+        key = ("claim", args.cl_cmd)
     else:
         key = (args.cmd,)
     handlers = {
         ("init",): cmd_init,
         ("evidence", "add"): cmd_evidence_add,
         ("evidence", "list"): cmd_evidence_list,
+        ("claim", "add"): cmd_claim_add,
+        ("claim", "list"): cmd_claim_list,
         ("verify",): cmd_verify,
+        ("check",): cmd_check,
+        ("report",): cmd_report,
     }
     handler = handlers.get(key)
     if handler is None:
@@ -194,6 +362,7 @@ def main(argv=None):
     except LedgerError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+
 
 if __name__ == "__main__":
     sys.exit(main())
