@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 LEDGER_DIR = ".anchor"
 LEDGER_FILE = "ledger.jsonl"
 HEAD_FILE = "HEAD"
+ANCHOR_FILE = "anchors.log"
 GENESIS_PREV = "0" * 64
 SOURCE_TYPES = ("tool_output", "manual", "document", "network", "external_report", "code_read")
 CONFIDENCES = ("high", "medium", "low")
@@ -299,6 +300,20 @@ def cmd_report(args, paths):
     print("\n".join(out))
 
 
+def cmd_stamp(args, paths):
+    _, head_path = paths
+    if not head_path.exists():
+        raise LedgerError("nothing to stamp; ledger is empty")
+    head = head_path.read_text(encoding="utf-8").strip()
+    anchor_path = head_path.parent / ANCHOR_FILE
+    anchor_path.parent.mkdir(parents=True, exist_ok=True)
+    with anchor_path.open("a", encoding="utf-8") as fh:
+        fh.write(f"{now_iso()} {head}\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    print(head)
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="anchor")
     p.add_argument("--root", default=".", help="project root containing .anchor/")
@@ -331,6 +346,7 @@ def build_parser():
     sub.add_parser("verify")
     sub.add_parser("check")
     sub.add_parser("report")
+    sub.add_parser("stamp")
     return p
 
 
@@ -352,6 +368,7 @@ def main(argv=None):
         ("verify",): cmd_verify,
         ("check",): cmd_check,
         ("report",): cmd_report,
+        ("stamp",): cmd_stamp,
     }
     handler = handlers.get(key)
     if handler is None:
