@@ -58,3 +58,12 @@ def test_gate_passes_with_evidence(tmp_path):
         "--status", "supported", "--evidence", ev)
     assert run(tmp_path, "check").returncode == 0
     assert "VERIFIED" in run(tmp_path, "report").stdout
+
+
+def test_stamp_records_head(tmp_path):
+    run(tmp_path, "init")
+    run(tmp_path, "evidence", "add", "--tool", "t", "--observation", "o")
+    head_hash = run(tmp_path, "stamp").stdout.strip()
+    assert len(head_hash) == 64
+    anchors = (tmp_path / ".anchor" / "anchors.log").read_text().strip()
+    assert head_hash in anchors

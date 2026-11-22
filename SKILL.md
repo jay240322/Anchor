@@ -45,6 +45,14 @@ Assume `ANCHOR="python3 scripts/anchor.py --root ."` and run from the project ro
    $ANCHOR verify     # exit 0 = OK, exit 2 = tamper
    ```
 
+4. Before publishing or handing off a report, stamp the current head hash and commit
+   the log so the chain has an external reference point:
+
+   ```bash
+   $ANCHOR stamp
+   git add .anchor/anchors.log && git commit -m "anchor: stamp"
+   ```
+
 ## Claims and the gate
 
 Every factual assertion in a final report becomes a claim. Do not deliver the report if
@@ -95,6 +103,21 @@ $ANCHOR report > FINDINGS.md
 | `caveats` | no | Scope limits, assumptions |
 
 Full schema: `references/record-schema.md`.
+
+## Threat model and honest limits
+
+The hash chain detects edits, reordering, and truncation of the ledger file. It does
+**not** stop an adversary who rewrites the entire ledger and recomputes every hash.
+
+Close that gap by running `$ANCHOR stamp` after each material change and committing
+`.anchor/anchors.log` (or the printed head hash) to git, or by submitting the head hash
+to an external timestamping service (OpenTimestamps, a public blockchain anchor, or
+your CI system's transparency log). The anchor is the external reference point that
+makes a full rewrite detectable.
+
+Appends are not locked for concurrent writers. One writer per ledger.
+There is no signing or key management. Add detached GPG signatures over `anchors.log`
+if you need non-repudiation.
 
 ## Graceful degradation
 
