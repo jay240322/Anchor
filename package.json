@@ -1,0 +1,23 @@
+{
+  "name": "anchor-skill",
+  "version": "0.1.0",
+  "description": "Tamper-evident evidence ledger for cybersecurity research — CLI + Agent Skill.",
+  "license": "MIT",
+  "bin": {
+    "anchor": "bin/anchor.js"
+  },
+  "files": [
+    "SKILL.md",
+    "README.md",
+    "LICENSE",
+    "scripts/",
+    "references/",
+    "bin/"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "python -m pytest -q"
+  }
+}
