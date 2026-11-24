@@ -1,6 +1,6 @@
 {
   "name": "anchor-evidence-skill",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Tamper-evident evidence ledger for cybersecurity research — CLI + Agent Skill.",
   "license": "MIT",
   "bin": {
